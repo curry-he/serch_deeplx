@@ -3,6 +3,7 @@
 # 寻找合适可用的deeplx
 
 本仓库包含一个使用 asyncio 和 aiohttp 发送异步 HTTP POST 请求并将成功的 URLs 保存到文件中的 Python 脚本。
+注：在原版基础上增加了测试延迟，并按延迟从低到高输出的功能
 
 ## 如何使用
 
