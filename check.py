@@ -1,6 +1,7 @@
 import asyncio
 import json
 import aiofiles
+import time
 from aiohttp import ClientSession, ClientTimeout
 
 # 定义缓冲区大小
@@ -12,7 +13,7 @@ async def check_url(session: ClientSession, url: str, max_retries=3):
     :param session: aiohttp 会话
     :param url: 目标 URL
     :param max_retries: 最大重试次数
-    :return: 元组 (URL, 响应 JSON)
+    :return: 元组 (URL, 响应 JSON, 延迟)
     """
     payload = json.dumps({
         "text": "hello world",
@@ -25,19 +26,22 @@ async def check_url(session: ClientSession, url: str, max_retries=3):
 
     for attempt in range(1, max_retries + 1):
         try:
+            start_time = time.time()
             requests_url = url + "/translate"
             async with session.post(requests_url, headers=headers, data=payload) as response:
-                response.raise_for_status()  
+                response.raise_for_status()
                 response_json = await response.json()
-                print(url, response_json)
-                return url, response_json
+                end_time = time.time()
+                delay = end_time - start_time
+                print(f"{url} Delay: {delay}s")
+                return url, response_json, delay
         except Exception as e:
             print(f"Error for URL {url} (Attempt {attempt}/{max_retries}): {e}")
             if attempt < max_retries:
-                await asyncio.sleep(1)  
+                await asyncio.sleep(1)
 
     print(f"All {max_retries} attempts failed. Defaulting to failure.")
-    return url, {'code': None, 'data': None}  
+    return url, {'code': None, 'data': None}, None
 
 async def process_urls(input_file, success_file):
     """
@@ -45,8 +49,9 @@ async def process_urls(input_file, success_file):
     :param input_file: 输入文件
     :param success_file: 成功文件
     """
-    unique_urls = set()  
-    buffer = []  
+    unique_urls = set()
+    buffer = []
+    delay_dict = {}
 
     try:
         # 从成功文件中读取已处理过的 URL
@@ -54,7 +59,7 @@ async def process_urls(input_file, success_file):
             existing_urls = {line.strip() for line in existing_file}
         unique_urls.update(existing_urls)
     except FileNotFoundError:
-        pass  
+        pass
 
     with open(input_file, 'r') as file:
         urls = [line.strip() for line in file.readlines()]
@@ -64,22 +69,28 @@ async def process_urls(input_file, success_file):
         tasks = [check_url(session, url) for url in urls]
         for future in asyncio.as_completed(tasks):
             try:
-                url, result = await future
+                url, result, delay = await future
                 if url not in unique_urls and result.get('code') == 200 and '世界' in result.get('data', ''):
                     buffer.append(url)
                     unique_urls.add(url)
+                    delay_dict[url] = delay
                     if len(buffer) >= BUFFER_SIZE:
                         # 写入成功文件
                         async with aiofiles.open(success_file, 'a') as valid_file:
-                            await valid_file.write('\n'.join(buffer) + '\n')
-                        buffer = []  
+                            await valid_file.write('\n'.join(f"{url},{delay_dict[url]}" for url in buffer) + '\n')
+                        buffer = []
             except Exception as exc:
                 print('%r generated an exception: %s' % (url, exc))
 
     if buffer:
         # 写入成功文件
         async with aiofiles.open(success_file, 'a') as valid_file:
-            await valid_file.write('\n'.join(buffer) + '\n')
+            await valid_file.write('\n'.join(f"{url},{delay_dict[url]}" for url in buffer) + '\n')
+
+    # 按延迟排序并写入成功文件
+    sorted_urls = sorted(delay_dict, key=delay_dict.get)
+    async with aiofiles.open(success_file, 'w') as valid_file:
+        await valid_file.write('\n'.join(f"{url},{delay_dict[url]}" for url in sorted_urls) + '\n')
 
 def list_file(input_file, output_file):
     """
@@ -90,7 +101,7 @@ def list_file(input_file, output_file):
     with open(input_file, 'r') as input_file_content:
         lines = input_file_content.readlines()
 
-    flattened_lines = ','.join(line.strip() for line in lines)
+    flattened_lines = ','.join(line.strip().split(",")[0] for line in lines)
 
     with open(output_file, 'w') as result_file:
         result_file.write(flattened_lines)
@@ -98,4 +109,4 @@ def list_file(input_file, output_file):
 asyncio.run(process_urls('input.txt', 'success.txt'))
 list_file('success.txt', 'success_result.txt')
 
-print ("all done")
+print("all done")
